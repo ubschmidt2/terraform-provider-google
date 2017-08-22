@@ -53,7 +53,11 @@ func resourceGoogleProject() *schema.Resource {
 			"org_id": &schema.Schema{
 				Type:     schema.TypeString,
 				Optional: true,
-				ForceNew: true,
+				Computed: true,
+			},
+			"folder_id": &schema.Schema{
+				Type:     schema.TypeString,
+				Optional: true,
 				Computed: true,
 			},
 			"policy_data": &schema.Schema{
@@ -97,6 +101,14 @@ func resourceGoogleProjectCreate(d *schema.ResourceData, meta interface{}) error
 		project.Parent = &cloudresourcemanager.ResourceId{
 			Id:   org_id,
 			Type: "organization",
+		}
+	}
+
+	if v, ok := d.GetOk("folder_id"); ok {
+		folder_id := v.(string)
+		project.Parent = &cloudresourcemanager.ResourceId{
+			Id:   folder_id,
+			Type: "folder",
 		}
 	}
 
@@ -149,7 +161,12 @@ func resourceGoogleProjectRead(d *schema.ResourceData, meta interface{}) error {
 	d.Set("name", p.Name)
 
 	if p.Parent != nil {
-		d.Set("org_id", p.Parent.Id)
+		switch p.Parent.Type {
+		case "organization":
+			d.Set("org_id", p.Parent.Id)
+		case "folder":
+			d.Set("folder_id", p.Parent.Id)
+		}
 	}
 
 	// Read the billing account
@@ -192,7 +209,9 @@ func resourceGoogleProjectUpdate(d *schema.ResourceData, meta interface{}) error
 		return fmt.Errorf("Error checking project %q: %s", pid, err)
 	}
 
-	// Project name has changed
+	d.Partial(true)
+
+	// Project display name has changed
 	if ok := d.HasChange("name"); ok {
 		p.Name = d.Get("name").(string)
 		// Do update on project
@@ -200,6 +219,34 @@ func resourceGoogleProjectUpdate(d *schema.ResourceData, meta interface{}) error
 		if err != nil {
 			return fmt.Errorf("Error updating project %q: %s", p.Name, err)
 		}
+		d.SetPartial("name")
+	}
+
+	// Project parent has changed
+	if d.HasChange("org_id") || d.HasChange("folder_id") {
+		if v, ok := d.GetOk("org_id"); ok {
+			org_id := v.(string)
+			p.Parent = &cloudresourcemanager.ResourceId{
+				Id:   org_id,
+				Type: "organization",
+			}
+		}
+
+		if v, ok := d.GetOk("folder_id"); ok {
+			folder_id := v.(string)
+			p.Parent = &cloudresourcemanager.ResourceId{
+				Id:   folder_id,
+				Type: "folder",
+			}
+		}
+
+		// Do update on project
+		p, err = config.clientResourceManager.Projects.Update(p.ProjectId, p).Do()
+		if err != nil {
+			return fmt.Errorf("Error updating project %q: %s", p.Name, err)
+		}
+		d.SetPartial("org_id")
+		d.SetPartial("folder_id")
 	}
 
 	// Billing account has changed
@@ -218,6 +265,9 @@ func resourceGoogleProjectUpdate(d *schema.ResourceData, meta interface{}) error
 			return fmt.Errorf("Error updating billing account %q for project %q: %v", name, prefixedProject(pid), err)
 		}
 	}
+
+	d.Partial(false)
+
 	return nil
 }
 
